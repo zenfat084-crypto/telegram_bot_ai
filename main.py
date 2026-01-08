@@ -1,86 +1,48 @@
 import os
-import telebot
-import requests
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import asyncio
+import logging
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+from groq import Groq
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))   # ID مدير البوت
+# إعداد السجلات (Logs) لمراقبة البوت من السيرفر
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-bot = telebot.TeleBot(TOKEN)
+# جلب المفاتيح من السيرفر (Environment Variables)
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
 
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+client = Groq(api_key=GROQ_API_KEY)
 
-users = set()
+def get_ai_response(user_input):
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": "You are 'ViralMind Pro'. Create viral social media scripts with Hook, Script, and Visual Cues. Response in user's language."},
+                {"role": "user", "content": user_input}
+            ]
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        return f"⚠️ Error: {str(e)}"
 
-# تسجيل المستخدمين
-@bot.message_handler(commands=["start"])
-def start(msg):
-    users.add(msg.chat.id)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🚀 ViralMind Pro is Online!\nSend me your video topic to start.")
 
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("🤖 دردشة الذكاء الاصطناعي", callback_data="ai_chat"))
-    kb.add(InlineKeyboardButton("📢 نشر إعلان", callback_data="send_ad"))
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    await update.message.reply_text("🧠 Crafting your viral script...")
+    
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, get_ai_response, user_text)
+    await update.message.reply_text(response)
 
-    bot.send_message(
-        msg.chat.id,
-        "مرحبًا! اختر إحدى الخيارات:",
-        reply_markup=kb
-    )
-
-
-# اختيار الزر
-@bot.callback_query_handler(func=lambda c: True)
-def handle_buttons(call):
-    if call.data == "ai_chat":
-        msg = bot.send_message(call.message.chat.id, "ارسل رسالتك للذكاء الاصطناعي:")
-        bot.register_next_step_handler(msg, ai_reply)
-
-    elif call.data == "send_ad":
-        if call.from_user.id != ADMIN_ID:
-            bot.answer_callback_query(call.id, "❌ ليس لديك صلاحية.", show_alert=True)
-            return
-
-        msg = bot.send_message(call.message.chat.id, "اكتب نص الإعلان:")
-        bot.register_next_step_handler(msg, send_ad_to_all)
-
-
-# ذكاء اصطناعي Groq LLaMA 3
-def ai_reply(msg):
-    prompt = msg.text
-
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "model": "llama3-8b-8192",
-        "messages": [
-            {"role": "user", "content": prompt}
-        ]
-    }
-
-    res = requests.post(GROQ_URL, json=data, headers=headers).json()
-
-    reply = res["choices"][0]["message"]["content"]
-
-    bot.send_message(msg.chat.id, reply)
-
-
-# نشر الإعلانات
-def send_ad_to_all(msg):
-    ad = msg.text
-    count = 0
-
-    for user in list(users):
-        try:
-            bot.send_message(user, ad)
-            count += 1
-        except:
-            pass
-
-    bot.send_message(msg.chat.id, f"تم إرسال الإعلان إلى {count} مستخدم.")
-
-
-bot.infinity_polling()
+if __name__ == '__main__':
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    
+    print("Bot is starting on the server...")
+    application.run_polling(drop_pending_updates=True)
